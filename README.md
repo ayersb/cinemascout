@@ -39,25 +39,37 @@ Area, New York and Seattle**.
 
 ## Architecture
 
-```
- browser ──────► ┌───────────────────────────┐  reads/writes  ┌──────────┐
- calendar apps ─►│  Next.js on Vercel        │ ◄────────────► │ Postgres │
-                 │  App Router · GraphQL API │                │  (Neon)  │
-                 └────────────┬──────────────┘                └────▲─────┘
-                    enqueue / │ serve feeds                        │
-                    poll jobs ▼                                    │
-                 ┌───────────────────────────┐                     │
-                 │  Cloudflare D1            │                     │
-                 │  job queue · ICS feeds    │                     │
-                 └────────────▲──────────────┘                     │
-                 claim jobs / │ write feeds                        │
-                              │                                    │
- theater sites ─►┌────────────┴──────────────┐  ingest/match       │
- TMDB ──────────►│  Worker (Raspberry Pi)    │ ────────────────────┘
-                 │  async only: cron + jobs  │
-                 └────────────┬──────────────┘
-                              ▼
-                        Resend (email)
+```mermaid
+flowchart LR
+    user(["Browser"])
+    cal(["Calendar apps"])
+    theaters(["Theater sites"])
+    tmdb(["TMDB"])
+
+    subgraph vercel["Vercel"]
+        web["Next.js App Router<br/>+ GraphQL API"]
+    end
+
+    subgraph data["Data"]
+        neon[("Postgres<br/>Neon")]
+        d1[("Cloudflare D1<br/>job queue · ICS feeds")]
+    end
+
+    subgraph pi["Raspberry Pi · async only"]
+        worker["Worker<br/>cron pipeline + job poller"]
+    end
+
+    resend(["Resend<br/>email digest"])
+
+    user --> web
+    cal -->|"fetch feed"| web
+    web <-->|"reads / writes"| neon
+    web -->|"jobs · feeds"| d1
+    worker -->|"claim jobs · write feeds"| d1
+    theaters --> worker
+    tmdb --> worker
+    worker -->|"ingest · match"| neon
+    worker --> resend
 ```
 
 The web app and API on Vercel handle all user-facing traffic against Neon. The

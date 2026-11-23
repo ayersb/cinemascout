@@ -40,21 +40,29 @@ Area, New York and Seattle**.
 ## Architecture
 
 ```
-                ┌──────────────────────────────┐
-   browser ───► │  Next.js (Vercel)            │
-                │  App Router · GraphQL API    │
-                └──────────────┬───────────────┘
-                               │ jobs (queue)
-                               ▼
- theater sites ─► ┌──────────────────────────┐    ┌──────────┐
-                  │  Worker (Raspberry Pi)   │◄──►│ Postgres │
-      TMDB ─────► │  ingest · resolve ·      │    │  (Neon)  │
-                  │  match · email · ICS     │    └──────────┘
-                  └──┬────────────┬──────────┘
-                     │            │
-                     ▼            ▼
-                Resend email   Calendar feeds
+ browser ──────► ┌───────────────────────────┐  reads/writes  ┌──────────┐
+ calendar apps ─►│  Next.js on Vercel        │ ◄────────────► │ Postgres │
+                 │  App Router · GraphQL API │                │  (Neon)  │
+                 └────────────┬──────────────┘                └────▲─────┘
+                    enqueue / │ serve feeds                        │
+                    poll jobs ▼                                    │
+                 ┌───────────────────────────┐                     │
+                 │  Cloudflare D1            │                     │
+                 │  job queue · ICS feeds    │                     │
+                 └────────────▲──────────────┘                     │
+                 claim jobs / │ write feeds                        │
+                              │                                    │
+ theater sites ─►┌────────────┴──────────────┐  ingest/match       │
+ TMDB ──────────►│  Worker (Raspberry Pi)    │ ────────────────────┘
+                 │  async only: cron + jobs  │
+                 └────────────┬──────────────┘
+                              ▼
+                        Resend (email)
 ```
+
+The web app and API on Vercel handle all user-facing traffic against Neon. The
+Pi runs **only asynchronous work**: the twice-daily ingest, match and digest
+pipeline, plus queued jobs such as Letterboxd imports.
 
 TypeScript monorepo (pnpm + Turborepo):
 
@@ -68,8 +76,9 @@ TypeScript monorepo (pnpm + Turborepo):
 | `packages/db` | Drizzle schema, drizzle-kit migrations, HTTP fetch cache. |
 | `packages/letterboxd` | Watchlist import. |
 
-**Infra:** Vercel (web + API), Neon Postgres, Resend (email), a self-hosted
-Raspberry Pi worker run with mise and systemd, and Sentry across all three.
+**Infra:** Vercel (web + API), Neon Postgres, Cloudflare D1 (job queue and
+calendar feeds), Resend (email), a self-hosted Raspberry Pi worker run with
+mise and systemd, and Sentry across all three.
 
 ## Engineering highlights
 
@@ -99,8 +108,24 @@ listing is resolved to a TMDB film **when it's ingested**, not at query time:
 `dispatch(job)` writes a job row (pending, running, succeeded or failed) and
 clients poll it. In development, jobs run in-process. In production the
 serverless API only enqueues, because fire-and-forget work doesn't survive a
-serverless function. The worker claims jobs with `FOR UPDATE SKIP LOCKED`.
-Slow work such as a large Letterboxd import uses this path.
+serverless function. The Pi worker then claims and runs the job. Slow work such
+as a large Letterboxd import uses this path.
+
+### Keeping Postgres asleep
+
+Neon scales to zero after 5 minutes idle, but any query resets that timer. A
+worker polling for jobs every few seconds, or calendar apps refreshing feeds
+every few minutes, would keep the database awake around the clock just to
+answer "nothing new". So both of those polling workloads live in Cloudflare D1:
+
+- **Job queue.** D1 has no `FOR UPDATE SKIP LOCKED`, but it serializes writes
+  per database. One conditional `UPDATE … RETURNING` is therefore an atomic
+  claim. Finished rows are swept, so polls scan only in-flight work.
+- **Calendar feeds.** The pipeline renders each user's ICS feed into D1 after
+  every run. Serving a feed is a single D1 read with an ETag and never touches
+  Postgres.
+
+Postgres handles only real traffic, and the polling fits within D1's free tier.
 
 ### Polite, failure-aware fetching
 
@@ -130,4 +155,4 @@ drizzle-kit and hosting cheap.
 
 TypeScript · Next.js · React · Tailwind · shadcn/ui · GraphQL (Yoga, Pothos) ·
 PostgreSQL · Drizzle · Turborepo · pnpm · node-cron · TMDB API · Claude API ·
-Resend · Vercel · Neon · Sentry · Raspberry Pi (systemd)
+Resend · Vercel · Neon · Cloudflare D1 · Sentry · Raspberry Pi (systemd)

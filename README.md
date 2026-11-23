@@ -1,8 +1,8 @@
 # CinemaScout
 
-**Bandsintown for cinema.** Follow the actors, directors and films you care
-about, or import your Letterboxd watchlist, and get told when they're
-**playing at an indie or repertory theater near you**.
+**Showtime alerts for the films you actually want to see.** Follow the actors,
+directors and films you care about, or import your Letterboxd watchlist, and
+get told when they're **playing at an indie or repertory theater near you**.
 
 **Live at [cinemascout.app](https://cinemascout.app)**
 
